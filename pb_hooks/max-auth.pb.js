@@ -1,50 +1,83 @@
-routerAdd("POST", "/max-auth", (c) => {
+routerAdd("POST", "/api/max-auth", (c) => {
     try {
-        // Создаем пустой объект и наполняем его данными из запроса
         let data = {};
-        
-        // Попробуем прочитать тело запроса через встроенный биндинг
         try {
             c.bind(data);
         } catch(e) {
-            // Если bind не сработал, попробуем взять напрямую из контекста
             data = c.get("data") || {};
         }
 
         const initData = data.initData || "";
+        
+        // Пишем входящую строку в логи PocketBase для отладки
+        console.log("--- INCOMING INIT DATA ---", initData);
+
         if (!initData) {
-            return c.json(400, { "error": "initData is required" });
+            return c.json(400, { "error": "initData is required. Check front-end payload." });
         }
 
-        // --- Логика обработки пользователя ---
-        const userMatch = initData.match(/user=([^&]+)/);
-        if (!userMatch) {
-            return c.json(400, { "error": "User data not found" });
+        // Ищем блок user= внутри initData
+        let userRawEncoded = "";
+        
+        if (initData.indexOf('user=') !== -1) {
+            const parts = initData.split('&');
+            for (let i = 0; i < parts.length; i++) {
+                if (parts[i].indexOf('user=') === 0) {
+                    userRawEncoded = parts[i].substring(5);
+                    break;
+                }
+            }
+        } else {
+            // Если initData пришла как чистый JSON-объект или в другом формате
+            userRawEncoded = initData;
         }
 
-        const userRaw = decodeURIComponent(userMatch[1]);
-        const userData = JSON.parse(userRaw);
-        const maxId = String(userData.id);
-        const fullName = (userData.first_name || "") + " " + (userData.last_name || "");
+        if (!userRawEncoded) {
+            return c.json(400, { "error": "User data block not found in initData string" });
+        }
+
+        // Декодируем и парсим JSON пользователя MAX
+        let userData;
+        try {
+            const userRaw = decodeURIComponent(userRawEncoded);
+            userData = JSON.parse(userRaw);
+        } catch(e) {
+            // Если строка уже была объектом
+            if (typeof userRawEncoded === 'object') {
+                userData = userRawEncoded;
+            } else {
+                return c.json(400, { "error": "Failed to parse user JSON: " + e.message });
+            }
+        }
+        
+        // Кросс-платформенный поиск ID (поддерживает id и user_id)
+        const maxId = String(userData.user_id || userData.id || userData.query?.user?.id || "");
+        if (!maxId || maxId === "undefined") {
+            return c.json(400, { "error": "Valid user id (user_id/id) missing in payload. Got: " + JSON.stringify(userData) });
+        }
+
+        const firstName = userData.first_name || userData.username || "Игрок MAX";
+        const lastName = userData.last_name || "";
+        const fullName = (firstName + " " + lastName).trim();
 
         let user;
         try {
-            // Ищем игрока в базе
             user = $app.dao().findFirstRecordByFilter("users", "max_id = {:maxId}", { maxId: maxId });
         } catch (e) {
-            // Если не нашли — создаем нового
             const collection = $app.dao().findCollectionByNameOrId("users");
             user = new Record(collection);
             user.set("max_id", maxId);
-            user.set("full_name", fullName.trim());
+            user.set("full_name", fullName);
             user.set("role", "user");
+            user.set("rating_points", 0);
+            user.set("games_count", 0);
+            user.set("wins", 0);
+            user.set("losses", 0);
             
-            // Генерируем случайный пароль (обязательно для Auth коллекций)
             user.setPassword($security.randomString(30));
             $app.dao().saveRecord(user);
         }
 
-        // Генерируем токен PocketBase
         const token = $app.newAuthToken(user, "users");
 
         return c.json(200, {
@@ -58,6 +91,6 @@ routerAdd("POST", "/max-auth", (c) => {
         });
 
     } catch (error) {
-        return c.json(500, { "error": "Hook error: " + error.message });
+        return c.json(500, { "error": "Crash: " + error.message });
     }
 });
