@@ -35,14 +35,26 @@ routerAdd("POST", "/api/max-auth", (c) => {
         const lastName = userData.last_name || "";
         const fullName = (firstName + " " + lastName).trim();
 
+        // Извлекаем URL аватарки из объекта User мессенджера MAX
+        const maxAvatarUrl = userData.photo_url || userData.avatar || "";
+
         let user;
         try {
             user = $app.findFirstRecordByFilter("users", "max_id = {:maxId}", { maxId: maxId });
+
+            // ФИКС: Обновляем avatar_url в БД ТОЛЬКО если MAX передал непустую строку
+            if (maxAvatarUrl) {
+                user.set("avatar_url", maxAvatarUrl);
+            }
+            user.set("full_name", fullName); // Синхронизируем имя, если изменилось в MAX
+            $app.save(user);
+
         } catch (e) {
             const collection = $app.findCollectionByNameOrId("users");
             user = new Record(collection);
             user.set("max_id", maxId);
             user.set("full_name", fullName);
+            user.set("avatar_url", maxAvatarUrl);
             user.set("role", "user");
             user.set("rating_points", 0);
             user.set("games_count", 0);
@@ -64,6 +76,7 @@ routerAdd("POST", "/api/max-auth", (c) => {
                 "id": user.id,
                 "max_id": user.get("max_id"),
                 "full_name": user.get("full_name"),
+                "avatar_url": user.get("avatar_url"),
                 "age": user.get("age"),
                 "dominant_hand": user.get("dominant_hand"),
                 "role": user.get("role"),
